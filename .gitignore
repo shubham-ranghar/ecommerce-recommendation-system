@@ -1,0 +1,10 @@
+# Python
+backend/.venv/
+__pycache__/
+.pytest_cache/
+# Generated data (recreate with: python -m data.generate_data)
+backend/data/shop.db
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env

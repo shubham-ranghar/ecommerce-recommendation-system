@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-11-18T15:08:25+00:00",
+  "k": 10,
+  "split": "time-based, latest 20% of each user's events (users with >= 5 events)",
+  "n_train_events": 16130,
+  "n_test_events": 4172,
+  "n_test_users": 273,
+  "n_products": 500,
+  "runtime_seconds": 7.08,
+  "results": [
+    {
+      "method": "random",
+      "label": "Random (baseline)",
+      "precision_at_10": 0.0048,
+      "recall_at_10": 0.0131,
+      "hit_rate_at_10": 0.0476,
+      "coverage": 0.994
+    },
+    {
+      "method": "popularity",
+      "label": "Popularity",
+      "precision_at_10": 0.0355,
+      "recall_at_10": 0.1081,
+      "hit_rate_at_10": 0.2747,
+      "coverage": 0.054
+    },
+    {
+      "method": "content",
+      "label": "Content-based",
+      "precision_at_10": 0.0396,
+      "recall_at_10": 0.1332,
+      "hit_rate_at_10": 0.315,
+      "coverage": 0.842
+    },
+    {
+      "method": "collaborative",
+      "label": "Collaborative (item-item)",
+      "precision_at_10": 0.067,
+      "recall_at_10": 0.2306,
+      "hit_rate_at_10": 0.4908,
+      "coverage": 0.402
+    },
+    {
+      "method": "svd",
+      "label": "Matrix factorisation (SVD)",
+      "precision_at_10": 0.0582,
+      "recall_at_10": 0.219,
+      "hit_rate_at_10": 0.4725,
+      "coverage": 0.538
+    },
+    {
+      "method": "hybrid",
+      "label": "Hybrid",
+      "precision_at_10": 0.0678,
+      "recall_at_10": 0.2198,
+      "hit_rate_at_10": 0.5092,
+      "coverage": 0.408
+    },
+    {
+      "method": "hybrid_no_diversity",
+      "label": "Hybrid without diversity rule",
+      "precision_at_10": 0.0762,
+      "recall_at_10": 0.2597,
+      "hit_rate_at_10": 0.5348,
+      "coverage": 0.516
+    }
+  ]
+}
