@@ -47,3 +47,13 @@ class Event(Base):
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     session_id: Mapped[str] = mapped_column(String(40), index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class AppSetting(Base):
+    """Key/value settings, e.g. the admin's recommendation rules (JSON in `value`).
+    Read and written by recommender/settings.py."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)

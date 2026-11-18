@@ -10,6 +10,7 @@ export const METHOD_STYLES = {
   svd: { label: "Matrix factorisation", icon: "🧮", chip: "bg-teal-50 text-teal-800 ring-teal-200" },
   bought_together: { label: "Bought together", icon: "🛒", chip: "bg-pink-50 text-pink-800 ring-pink-200" },
   hybrid: { label: "Hybrid", icon: "⚡", chip: "bg-emerald-50 text-emerald-800 ring-emerald-200" },
+  history: { label: "Your history", icon: "🕘", chip: "bg-slate-100 text-slate-700 ring-slate-300" },
 };
 
 export function methodStyle(method = "") {

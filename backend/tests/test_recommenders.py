@@ -10,6 +10,7 @@ from recommender.collaborative import FrequentlyBoughtTogether, ItemCFRecommende
 from recommender.content_based import ContentBasedRecommender
 from recommender.hybrid import HybridRecommender
 from recommender.popularity import PopularityRecommender
+from recommender.settings import RecommenderSettings
 from tests.conftest import NOW, make_events
 
 
@@ -93,3 +94,22 @@ def test_metrics() -> None:
     p, r, h = precision_recall_hit([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], {3, 42}, k=10)
     assert np.isclose(p, 0.1) and np.isclose(r, 0.5) and h == 1.0
     assert precision_recall_hit([1, 2], {9}, k=10) == (0.0, 0.0, 0.0)
+
+
+def test_hybrid_can_keep_purchased_items(events: pd.DataFrame, catalog: Catalog) -> None:
+    """Admin switch: with hide_purchased off, a repeat-buy item may come back."""
+    hybrid = fit_all(events, catalog)
+    hybrid.exclude_purchased = False
+    history = build_history(events[events["user_id"] == 1], catalog)
+    ids = [r.product_id for r in hybrid.recommend(history, n=10)]
+    assert 1 in ids or 3 in ids
+
+
+def test_settings_round_trip_and_fill_missing_weights() -> None:
+    settings = RecommenderSettings(max_per_category=2, hide_purchased=False)
+    assert RecommenderSettings.from_dict(settings.to_dict()) == settings
+    # An older saved row with a missing weight and an unknown key still loads.
+    loaded = RecommenderSettings.from_dict({"weights": {"content": 0.9}, "unknown": 1})
+    assert loaded.weights["content"] == 0.9 and set(loaded.weights) == set(RecommenderSettings().weights)
+    assert loaded.hybrid_kwargs()["exclude_purchased"] is True
+

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 EventType = Literal["view", "click", "add_to_cart", "purchase", "rating"]
 
@@ -69,3 +69,43 @@ class HomeOut(BaseModel):
     user_type: Literal["new", "returning"]
     n_events: int
     sections: list[SectionOut]
+
+
+# ---------- admin ----------
+class HybridWeights(BaseModel):
+    """Blend weights of the hybrid. Only their ratio matters; they do not need to sum to 1."""
+
+    collaborative: float = Field(ge=0, le=1)
+    svd: float = Field(ge=0, le=1)
+    content: float = Field(ge=0, le=1)
+    popularity: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def at_least_one(self) -> "HybridWeights":
+        if self.collaborative + self.svd + self.content + self.popularity <= 0:
+            raise ValueError("At least one method needs a weight above 0")
+        return self
+
+
+class RecommenderSettingsModel(BaseModel):
+    weights: HybridWeights
+    max_per_category: int = Field(ge=1, le=10, description="Diversity: max items per category in the top 10")
+    price_penalty: float = Field(ge=0, le=1, description="Max score lost for being far from the user's price range")
+    hide_out_of_stock: bool
+    hide_purchased: bool
+    min_events_for_personalisation: int = Field(ge=1, le=20)
+    show_recently_viewed: bool
+    show_purchase_based: bool
+
+
+class AdminSettingsOut(BaseModel):
+    current: RecommenderSettingsModel
+    defaults: RecommenderSettingsModel
+
+
+class AdminStatsOut(BaseModel):
+    n_products: int
+    n_out_of_stock: int
+    n_users: int
+    n_events: int
+    events_by_type: dict[str, int]

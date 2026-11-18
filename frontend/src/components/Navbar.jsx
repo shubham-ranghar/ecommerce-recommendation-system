@@ -22,6 +22,7 @@ export default function Navbar() {
           <NavLink to="/" end className={linkClass}>Home</NavLink>
           <NavLink to="/shop" className={linkClass}>Shop</NavLink>
           <NavLink to="/evaluation" className={linkClass}>Evaluation</NavLink>
+          <NavLink to="/admin" className={linkClass}>Admin</NavLink>
         </nav>
 
         <div className="ml-auto flex items-center gap-3">

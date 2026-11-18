@@ -3,8 +3,12 @@
 It loads data from SQLite, trains every model, and decides WHICH list to show
 based on CONTEXT:
   - new visitor (fewer than 3 events)  -> popularity + category-based lists
-  - returning user                     -> personalised hybrid list
+  - returning user                     -> personalised hybrid list, recently viewed,
+                                          based on your purchases
   - the current page decides the list  -> home / product page / cart
+
+The hybrid weights and business rules come from RecommenderSettings, which the
+Admin page can change at runtime (see recommender/settings.py).
 
 Models are retrained automatically (at most every few seconds) after new events
 arrive, while each user's own history is always read fresh from the database.
@@ -15,6 +19,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import Engine, text
 
@@ -24,8 +29,14 @@ from recommender.collaborative import FrequentlyBoughtTogether, ItemCFRecommende
 from recommender.content_based import ContentBasedRecommender
 from recommender.hybrid import HybridRecommender
 from recommender.popularity import PopularityRecommender
+from recommender.settings import RecommenderSettings, load_settings, save_settings
 
-MIN_EVENTS_FOR_PERSONALISATION = 3
+# Wording for "Recently viewed" reasons, keyed by the strongest action on a product.
+RECENT_REASONS = {
+    "viewed": "You viewed this",
+    "added": "You added this to your cart",
+    "rated": "You rated this",
+}
 
 
 def load_products(db: Engine) -> pd.DataFrame:
@@ -50,6 +61,7 @@ class RecommendationEngine:
         self._lock = threading.Lock()
         self._dirty = True
         self._last_fit = 0.0
+        self.settings = RecommenderSettings()
 
     # ---------- training ----------
     def fit(self) -> None:
@@ -57,6 +69,7 @@ class RecommendationEngine:
         with self._lock:
             products = load_products(self.db)
             events = load_events(self.db)
+            self.settings = load_settings(self.db)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             if not events.empty:
                 now = max(now, events["timestamp"].max().to_pydatetime())
@@ -68,10 +81,22 @@ class RecommendationEngine:
             self.item_cf = ItemCFRecommender().fit(matrix, self.catalog)
             self.svd = SVDRecommender().fit(matrix, self.catalog)
             self.fbt = FrequentlyBoughtTogether().fit(events, self.catalog)
-            self.hybrid = HybridRecommender(self.popularity, self.content, self.item_cf, self.svd)
+            self.hybrid = self._build_hybrid()
             self.n_events = len(events)
             self._dirty = False
             self._last_fit = time.time()
+
+    def _build_hybrid(self) -> HybridRecommender:
+        return HybridRecommender(self.popularity, self.content, self.item_cf, self.svd,
+                                 **self.settings.hybrid_kwargs())
+
+    def update_settings(self, settings: RecommenderSettings) -> None:
+        """Save new admin settings and apply them immediately (no retrain needed)."""
+        save_settings(self.db, settings)
+        self.ensure_fresh()
+        with self._lock:
+            self.settings = settings
+            self.hybrid = self._build_hybrid()
 
     def mark_dirty(self) -> None:
         """Call after new events: models will be retrained on the next request."""
@@ -98,7 +123,8 @@ class RecommendationEngine:
         history = self.history(user_id)
         sections: list[dict] = []
 
-        if history.n_events < MIN_EVENTS_FOR_PERSONALISATION:
+        settings = self.settings
+        if history.n_events < settings.min_events_for_personalisation:
             user_type = "new"
             sections.append(self._section("trending", "Trending now", "Hot products right now", "popularity",
                                           self.popularity.top(n)))
@@ -115,21 +141,68 @@ class RecommendationEngine:
                 [Recommendation(int(self.catalog.ids[i]), float(self.popularity.sales[i]),
                                 f"{int(self.popularity.sales[i])} purchases", "popularity") for i in best],
             ))
+            if settings.show_recently_viewed and (recent := self.recently_viewed(history, n)):
+                sections.append(self._recently_viewed_section(recent))
         else:
             user_type = "returning"
-            personal = self.hybrid.recommend(history, n=n)
+            # Products in "Recently viewed" are not repeated in the personalised rows.
+            recent = self.recently_viewed(history, n) if settings.show_recently_viewed else []
+            recent_idx = self._idx([r.product_id for r in recent])
+            personal = self.hybrid.recommend(history, n=n, exclude=recent_idx,
+                                             apply_stock_filter=settings.hide_out_of_stock)
             sections.append(self._section("for_you", "Recommended for you",
                                           "Personalised with the hybrid recommender", "hybrid", personal))
-            last = int(self.catalog.ids[history.recent[0]])
-            similar = self.content.similar(last, n=6, exclude=history.purchased)
-            for r in similar:
-                r.reason = f"Because you {history.actions.get(history.recent[0], 'viewed')} {self.catalog.names[history.recent[0]]}"
-            sections.append(self._section("because", f"Inspired by {self.catalog.names[history.recent[0]]}",
-                                          "Similar to what you looked at last", "content", similar))
-            shown = self._idx([r.product_id for r in personal])
+            shown = self._idx([r.product_id for r in personal]) | recent_idx
+            if recent:
+                sections.append(self._recently_viewed_section(recent))
+            if settings.show_purchase_based and (based := self.purchase_based(history, n=n, exclude=shown)):
+                shown |= self._idx([r.product_id for r in based])
+                sections.append(self._section("purchases", "Based on your purchases",
+                                              "Picked from what you bought before", "hybrid", based))
+            if history.recent:
+                last_i = history.recent[0]
+                similar = self.content.similar(int(self.catalog.ids[last_i]), n=6, exclude=history.purchased)
+                verb = history.actions.get(last_i, "viewed")
+                for r in similar:
+                    r.reason = f"Because you {verb} {self.catalog.names[last_i]}"
+                sections.append(self._section("because", f"Inspired by {self.catalog.names[last_i]}",
+                                              "Similar to what you looked at last", "content", similar))
             sections.append(self._section("trending", "Trending now", "What everyone is looking at", "popularity",
                                           self.popularity.top(n, exclude=shown | history.purchased)))
         return {"user_id": user_id, "user_type": user_type, "n_events": history.n_events, "sections": sections}
+
+    def recently_viewed(self, history: UserHistory, n: int = 10) -> list[Recommendation]:
+        """Products the user looked at most recently and has not bought (newest first)."""
+        items = [i for i in history.recent if i not in history.purchased][:n]
+        return [
+            Recommendation(int(self.catalog.ids[i]), float(len(items) - rank),
+                           RECENT_REASONS.get(history.actions.get(i, "viewed"), "You viewed this"), "history")
+            for rank, i in enumerate(items)
+        ]
+
+    def purchase_based(self, history: UserHistory, n: int = 10, exclude: set[int] | None = None) -> list[Recommendation]:
+        """Hybrid recommendations that use ONLY the user's purchases as input."""
+        bought = sorted(history.purchased)
+        if not bought:
+            return []
+        weights = np.zeros(len(self.catalog))
+        weights[bought] = history.weights[bought]
+        purchases_only = UserHistory(
+            weights=weights,
+            purchased=set(history.purchased),
+            recent=[i for i in history.recent if i in history.purchased],
+            actions={i: "bought" for i in bought},
+            n_events=len(bought),
+        )
+        # Never suggest something the user already owns in this row, whatever the admin setting.
+        blocked = set(exclude or set()) | history.purchased
+        return self.hybrid.recommend(purchases_only, n=n, exclude=blocked,
+                                     apply_stock_filter=self.settings.hide_out_of_stock)
+
+    def bought_together(self, product_id: int, n: int = 6) -> list[Recommendation]:
+        """'Frequently bought together' for one product (product page)."""
+        self.ensure_fresh()
+        return self.fbt.recommend([product_id], n)
 
     def similar(self, product_id: int, n: int = 8) -> list[Recommendation]:
         self.ensure_fresh()
@@ -166,6 +239,9 @@ class RecommendationEngine:
         if len(recs) < n:
             recs += self.popularity.top(n - len(recs), exclude=have)
         return recs[:n]
+
+    def _recently_viewed_section(self, items: list[Recommendation]) -> dict:
+        return self._section("recent", "Recently viewed", "Pick up where you left off", "history", items)
 
     @staticmethod
     def _section(key: str, title: str, subtitle: str, method: str, items: list[Recommendation]) -> dict:

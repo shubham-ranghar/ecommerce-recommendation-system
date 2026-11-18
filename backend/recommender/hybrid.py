@@ -6,7 +6,7 @@ Pipeline for one user:
                        2. weighted sum: 35% item-CF + 20% SVD + 25% content + 20% popularity
                        3. business rules:
                           - remove out-of-stock items
-                          - remove items the user already bought
+                          - remove items the user already bought (can be switched off)
                           - prefer the user's usual price range (soft penalty)
                           - diversity: max 3 items from the same category in the top 10
   EXPLAIN              the method that contributed most decides the reason text.
@@ -38,6 +38,7 @@ class HybridRecommender:
         n_candidates: int = 100,
         max_per_category: int = 3,
         price_penalty: float = 0.3,
+        exclude_purchased: bool = True,
     ) -> None:
         self.popularity = popularity
         self.content = content
@@ -47,6 +48,7 @@ class HybridRecommender:
         self.n_candidates = n_candidates
         self.max_per_category = max_per_category
         self.price_penalty = price_penalty
+        self.exclude_purchased = exclude_purchased
 
     def recommend(
         self,
@@ -68,7 +70,9 @@ class HybridRecommender:
         }
 
         # 2) Business rules that remove items completely
-        blocked = set(exclude or set()) | history.purchased
+        blocked = set(exclude or set())
+        if self.exclude_purchased:
+            blocked |= history.purchased
         if apply_stock_filter:
             blocked |= set(np.flatnonzero(~catalog.in_stock).tolist())
 

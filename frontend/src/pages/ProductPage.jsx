@@ -12,6 +12,7 @@ export default function ProductPage() {
   const [product, setProduct] = useState(null);
   const [similar, setSimilar] = useState(null);
   const [alsoLiked, setAlsoLiked] = useState(null);
+  const [boughtTogether, setBoughtTogether] = useState(null);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState("");
   const [myRating, setMyRating] = useState(0);
@@ -21,11 +22,13 @@ export default function ProductPage() {
     setProduct(null);
     setSimilar(null);
     setAlsoLiked(null);
+    setBoughtTogether(null);
     setMessage("");
     setMyRating(0);
     api.product(productId).then(setProduct).catch((e) => setError(e.message));
     api.similar(productId).then(setSimilar).catch(() => setSimilar([]));
     api.alsoLiked(productId).then(setAlsoLiked).catch(() => setAlsoLiked([]));
+    api.boughtTogether(productId).then(setBoughtTogether).catch(() => setBoughtTogether([]));
   }, [productId]);
 
   // COLLECT: log one "view" event per product page visit
@@ -108,6 +111,16 @@ export default function ProductPage() {
         </div>
       </div>
 
+      {/* Hidden when this product has no basket history yet */}
+      {(!boughtTogether || boughtTogether.length > 0) && (
+        <RecommendationRow
+          title="Frequently bought together"
+          subtitle="Products that often end up in the same basket as this one"
+          method="bought_together"
+          items={boughtTogether?.slice(0, 5)}
+          loading={!boughtTogether}
+        />
+      )}
       <RecommendationRow
         title="Similar products"
         subtitle="Products with similar descriptions and tags (TF-IDF + cosine similarity)"

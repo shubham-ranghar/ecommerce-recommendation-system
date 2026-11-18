@@ -34,9 +34,16 @@ export const api = {
   home: (userId) => request(`/recommend/home${qs({ user_id: userId })}`),
   similar: (id) => request(`/recommend/similar/${id}`),
   alsoLiked: (id) => request(`/recommend/also-liked/${id}`),
+  boughtTogether: (id) => request(`/recommend/bought-together/${id}`),
   cart: (userId, productIds) =>
     request(`/recommend/cart${qs({ user_id: userId, product_ids: productIds.join(",") })}`),
   evaluation: (refresh = false) => request(`/evaluation${refresh ? "?refresh=true" : ""}`),
+  // Admin: recommendation rules
+  adminSettings: () => request("/admin/settings"),
+  saveAdminSettings: (settings) => request("/admin/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  resetAdminSettings: () => request("/admin/settings/reset", { method: "POST" }),
+  adminEvaluate: () => request("/admin/evaluate", { method: "POST" }),
+  adminStats: () => request("/admin/stats"),
 };
 
 export const imageUrl = (product) => `${API_URL}${product.image_url}`;

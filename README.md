@@ -5,6 +5,10 @@ A working full-stack demo of an online shop that recommends products using four 
 combines them with business rules. Every recommendation comes with a short reason, such as
 *"Because you viewed Voltix Pro Smartphone"* or *"Popular in Electronics"*.
 
+**Features:** personalised recommendations · similar products · customers also liked ·
+frequently bought together (product page and cart) · recently viewed · based on your purchases ·
+an **Admin page** to tune the hybrid's weights and business rules without touching code.
+
 | Part | Technology |
 |---|---|
 | Backend | Python 3.11+, FastAPI, SQLite via SQLAlchemy |
@@ -66,9 +70,11 @@ pytest -v
 1. **Cold start.** Open the Home page. You are a *new visitor*, so you see **Trending now** and **Best sellers** (popularity).
 2. **Learning live.** Open 2 or 3 products and click *Add to cart*. Each action is saved as an event in SQLite. Go back to Home: the context changes to *returning user* and **Recommended for you** appears.
 3. **Returning users.** Pick a demo shopper in the top-right selector (for example *"Likes Electronics & Office Supplies"*). Their list is personalised, and every item shows a reason.
-4. **Product page.** **Similar products** comes from content-based filtering and **Customers who liked this also liked** comes from collaborative filtering.
+   Returning users also see **Recently viewed** and **Based on your purchases**.
+4. **Product page.** **Frequently bought together** (hidden when a product has no basket data yet), **Similar products** from content-based filtering, and **Customers who liked this also liked** from collaborative filtering.
 5. **Cart page.** **Frequently bought together**, for example Smartphone → Phone Case, or Notebook → Gel Pen Set.
 6. **Evaluation page.** A bar chart comparing all methods, with a short explanation of each metric.
+7. **Admin page.** Move the blend sliders or set *Max products per category* to 1, save, and reload Home: the list changes immediately. *Run test* compares your saved rules with the defaults on past data.
 
 ---
 
@@ -127,12 +133,12 @@ ecommerce-recommendation-system/
 ├── backend/
 │   ├── app/                 # FastAPI: database.py, models.py, schemas.py, main.py, images.py
 │   ├── data/                # generate_data.py → shop.db
-│   ├── recommender/         # base.py, popularity.py, content_based.py, collaborative.py, hybrid.py, engine.py
+│   ├── recommender/         # base.py, popularity.py, content_based.py, collaborative.py, hybrid.py, engine.py, settings.py
 │   ├── evaluation/          # evaluate.py → results.json
 │   ├── tests/               # pytest tests (recommenders + API)
 │   └── requirements.txt
 ├── frontend/
-│   └── src/                 # api.js, store.jsx, components/, pages/ (Home, Shop, ProductPage, CartPage, Evaluation)
+│   └── src/                 # api.js, store.jsx, components/, pages/ (Home, Shop, ProductPage, CartPage, Evaluation, Admin)
 └── README.md
 ```
 
@@ -197,12 +203,33 @@ Counts how often two products end up in the **same shopping session's basket** (
 ### 5.6 Context: which list is shown when?
 | Situation | What we show |
 |---|---|
-| New visitor (< 3 interactions) | Trending now, *Popular in &lt;category you are browsing&gt;*, Best sellers |
-| Returning user | Recommended for you (hybrid), Inspired by your last viewed item, Trending now |
-| Product page | Similar products (content), Customers also liked (item-CF) |
+| New visitor (< 3 interactions) | Trending now, *Popular in &lt;category you are browsing&gt;*, Best sellers, Recently viewed |
+| Returning user | Recommended for you (hybrid), Recently viewed, Based on your purchases, Inspired by your last viewed item, Trending now |
+| Product page | Frequently bought together, Similar products (content), Customers also liked (item-CF) |
 | Cart page | Frequently bought together |
 
+- **Recently viewed** lists products the user interacted with but did not buy, newest first. They are not repeated in the personalised rows below.
+- **Based on your purchases** runs the hybrid on the user's purchases only, so its reasons read *"Because you bought X"*.
+- The "3 interactions" threshold and both extra rows can be changed on the Admin page (section 5.7).
+
 Models retrain automatically, at most every 3 seconds, after new events arrive. Each user's own history is always read fresh from the database, so recommendations react immediately to what you do on the site.
+
+### 5.7 Admin page: managing the rules
+The hybrid's settings live in `recommender/settings.py` and are stored as JSON in the `app_settings` table, so they survive restarts. Regenerating the data resets them to the defaults.
+
+| Setting | Default | Effect |
+|---|---|---|
+| Blend weights | 0.35 / 0.20 / 0.25 / 0.20 | How much item-CF, SVD, content and popularity count. Only the ratio matters. |
+| Max products per category | 3 | Diversity rule (10 = no limit) |
+| Price-range preference | 0.30 | Max share of score lost for being far from the user's usual price range (0 = off) |
+| Hide out-of-stock | on | |
+| Hide already bought | on | Turn off for repeat-purchase shops (groceries, pet food) |
+| Interactions before personalising | 3 | Cold-start threshold |
+| Show Recently viewed / Based on your purchases | on | Home page rows |
+
+Saving applies the rules to the next request without retraining. **Run test** calls `POST /admin/evaluate`, which adds a *Hybrid with admin settings* row to the offline evaluation (not saved to `results.json`).
+
+> The admin endpoints have **no login**. That is fine for this local demo, but a real shop must protect them (an admin session or API key) before going live.
 
 ---
 
@@ -259,9 +286,15 @@ Interactive docs (Swagger UI): **http://localhost:8000/docs**
 | GET | `/recommend/home?user_id=` | Trending for new visitors, "Recommended for you" for returning users |
 | GET | `/recommend/similar/{product_id}` | Content-based similar products |
 | GET | `/recommend/also-liked/{product_id}` | Item-item collaborative filtering |
+| GET | `/recommend/bought-together/{product_id}` | Frequently bought together for one product (empty if no basket data) |
 | GET | `/recommend/cart?user_id=&product_ids=1,2` | Frequently bought together (cart is rebuilt from events if `product_ids` is omitted) |
 | GET | `/evaluation?refresh=false` | Saved evaluation results (`refresh=true` re-runs it) |
 | GET | `/images/{id}.svg` | Generated placeholder product image (works offline) |
+| GET | `/admin/settings` | Current and default recommendation rules |
+| PUT | `/admin/settings` | Save new rules (validated; applied immediately) |
+| POST | `/admin/settings/reset` | Restore the default rules |
+| POST | `/admin/evaluate` | Score the saved rules against the default hybrid |
+| GET | `/admin/stats` | Product, user and event counts for the Admin page |
 
 Every recommendation response has the form `{product, score, reason, method}`.
 
@@ -269,9 +302,9 @@ Every recommendation response has the form `{product, score, reason, method}`.
 
 ## 8. Tests
 
-`backend/tests/` contains 13 pytest tests:
+`backend/tests/` contains 19 pytest tests:
 - **`test_recommenders.py`** uses a tiny hand-made shop with known correct answers. It tests event weights, recency in popularity, content similarity, item-CF co-interactions, frequently bought together, the hybrid business rules (bought, out of stock, diversity), personalisation, the time-based split and the metric formulas.
-- **`test_api.py`** tests the full API on a *temporary* database (your real `shop.db` is never touched), including a new visitor becoming a returning user after 3 events.
+- **`test_api.py`** tests the full API on a *temporary* database (your real `shop.db` is never touched), including a new visitor becoming a returning user after 3 events, the Recently viewed and Based on your purchases rows, product-page bought together, and admin settings changing the recommendations.
 
 ---
 

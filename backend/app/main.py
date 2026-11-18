@@ -20,17 +20,21 @@ from app.database import Base, engine, get_db
 from app.images import product_svg
 from app.models import Event, Product, User
 from app.schemas import (
+    AdminSettingsOut,
+    AdminStatsOut,
     EventIn,
     EventOut,
     HomeOut,
     ProductOut,
     ProductPage,
     RecommendationOut,
+    RecommenderSettingsModel,
     UserOut,
 )
 from evaluation.evaluate import RESULTS_PATH, evaluate
 from recommender.base import Recommendation
 from recommender.engine import RecommendationEngine
+from recommender.settings import RecommenderSettings
 
 recommender = RecommendationEngine(engine)
 
@@ -53,7 +57,7 @@ app = FastAPI(title="ShopSmart Recommendation API", version="1.0.0", lifespan=li
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"],
+    allow_methods=["*"],  # includes PUT for the admin settings
     allow_headers=["*"],
 )
 
@@ -232,6 +236,14 @@ def recommend_also_liked(product_id: int, n: int = Query(default=8, ge=1, le=30)
     return to_recommendations(db, recommender.also_liked(product_id, n))
 
 
+@app.get("/recommend/bought-together/{product_id}", response_model=list[RecommendationOut])
+def recommend_bought_together(product_id: int, n: int = Query(default=6, ge=1, le=30),
+                              db: Session = Depends(get_db)) -> list[RecommendationOut]:
+    """Frequently bought together for one product (product page). Empty when there is no basket data."""
+    get_product_or_404(db, product_id)
+    return to_recommendations(db, recommender.bought_together(product_id, n))
+
+
 @app.get("/recommend/cart", response_model=list[RecommendationOut])
 def recommend_cart(
     user_id: int | None = None,
@@ -269,3 +281,48 @@ def get_evaluation(refresh: bool = False) -> dict:
     if refresh or not RESULTS_PATH.exists():
         return evaluate()
     return json.loads(RESULTS_PATH.read_text(encoding="utf-8"))
+
+
+# ---------- admin: recommendation rules ----------
+# Note: these endpoints have no login. That is fine for a local demo, but a real
+# shop must protect them (e.g. an admin session or API key) before going live.
+def settings_out(settings: RecommenderSettings) -> RecommenderSettingsModel:
+    return RecommenderSettingsModel(**settings.to_dict())
+
+
+@app.get("/admin/settings", response_model=AdminSettingsOut)
+def get_admin_settings() -> AdminSettingsOut:
+    recommender.ensure_fresh()
+    return AdminSettingsOut(current=settings_out(recommender.settings), defaults=settings_out(RecommenderSettings()))
+
+
+@app.put("/admin/settings", response_model=AdminSettingsOut)
+def put_admin_settings(body: RecommenderSettingsModel) -> AdminSettingsOut:
+    """Save new weights and rules. They apply to the next recommendation request."""
+    recommender.update_settings(RecommenderSettings.from_dict(body.model_dump()))
+    return get_admin_settings()
+
+
+@app.post("/admin/settings/reset", response_model=AdminSettingsOut)
+def reset_admin_settings() -> AdminSettingsOut:
+    recommender.update_settings(RecommenderSettings())
+    return get_admin_settings()
+
+
+@app.post("/admin/evaluate")
+def evaluate_admin_settings() -> dict:
+    """Score the saved admin settings against the defaults (a few seconds; not saved to results.json)."""
+    recommender.ensure_fresh()
+    return evaluate(save=False, settings=recommender.settings)
+
+
+@app.get("/admin/stats", response_model=AdminStatsOut)
+def admin_stats(db: Session = Depends(get_db)) -> AdminStatsOut:
+    by_type = dict(db.execute(select(Event.event_type, func.count()).group_by(Event.event_type)).all())
+    return AdminStatsOut(
+        n_products=db.scalar(select(func.count()).select_from(Product)) or 0,
+        n_out_of_stock=db.scalar(select(func.count()).where(Product.stock <= 0)) or 0,
+        n_users=db.scalar(select(func.count()).select_from(User)) or 0,
+        n_events=sum(by_type.values()),
+        events_by_type=by_type,
+    )

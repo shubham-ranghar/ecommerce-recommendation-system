@@ -7,6 +7,7 @@ import Shop from "./pages/Shop";
 import ProductPage from "./pages/ProductPage";
 import CartPage from "./pages/CartPage";
 import Evaluation from "./pages/Evaluation";
+import Admin from "./pages/Admin";
 
 export default function App() {
   const { backendError } = useApp();
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/product/:id" element={<ProductPage />} />
           <Route path="/cart" element={<CartPage />} />
           <Route path="/evaluation" element={<Evaluation />} />
+          <Route path="/admin" element={<Admin />} />
         </Routes>
       </main>
       <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-400">

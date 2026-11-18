@@ -37,6 +37,7 @@ from recommender.content_based import ContentBasedRecommender  # noqa: E402
 from recommender.engine import load_events, load_products  # noqa: E402
 from recommender.hybrid import HybridRecommender  # noqa: E402
 from recommender.popularity import PopularityRecommender  # noqa: E402
+from recommender.settings import RecommenderSettings  # noqa: E402
 
 RESULTS_PATH = Path(__file__).resolve().parent / "results.json"
 K = 10
@@ -51,6 +52,7 @@ METHOD_LABELS = {
     "svd": "Matrix factorisation (SVD)",
     "hybrid": "Hybrid",
     "hybrid_no_diversity": "Hybrid without diversity rule",
+    "hybrid_admin": "Hybrid with admin settings",
 }
 
 
@@ -71,7 +73,9 @@ def precision_recall_hit(recommended: list[int], relevant: set[int], k: int = K)
     return precision, recall, float(hits > 0)
 
 
-def evaluate(db=None, k: int = K, save: bool = True) -> dict:
+def evaluate(db=None, k: int = K, save: bool = True, settings: RecommenderSettings | None = None) -> dict:
+    """Run the offline evaluation. With `settings`, an extra "hybrid_admin" row scores
+    the hybrid with those weights and rules, so an admin can compare them with the defaults."""
     db = db or default_engine
     started = time.time()
     catalog = Catalog(load_products(db))
@@ -109,6 +113,12 @@ def evaluate(db=None, k: int = K, save: bool = True) -> dict:
             for r in hybrid_no_div.recommend(h, n=k, exclude=seen, apply_stock_filter=False)
         ],
     }
+    if settings is not None:
+        hybrid_admin = HybridRecommender(popularity, content, item_cf, svd, **settings.hybrid_kwargs())
+        methods["hybrid_admin"] = lambda h, seen: [
+            catalog.index[r.product_id]
+            for r in hybrid_admin.recommend(h, n=k, exclude=seen, apply_stock_filter=False)
+        ]
 
     # Relevant items per user = new products with positive feedback in the test period
     test = test.assign(w=event_weights(test))
