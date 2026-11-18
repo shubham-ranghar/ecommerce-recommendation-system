@@ -163,7 +163,8 @@ def test_product_images_match_type_and_are_stable(client: TestClient) -> None:
         _pytest.skip("run python -m data.fetch_images first")
     phones = photo_candidates("Voltix Neo Smartphone", "Electronics")
     assert phones and all(p["category"] == "smartphones" for p in phones)
-    assert product_photo(1, "Voltix Neo Smartphone", "Electronics") == product_photo(1, "Voltix Neo Smartphone", "Electronics")
+    # every product of a type shares one photo
+    assert product_photo("Voltix Neo Smartphone", "Electronics") == product_photo("Lumio Max Smartphone", "Electronics")
     assert photo_candidates("Inkstone Ergonomic Wireless Mouse", "Office Supplies") == []  # never a phone photo
     assert all("chair" in p["title"].lower() for p in photo_candidates("Clarion Classic Office Chair", "Office Supplies"))
 
@@ -176,6 +177,19 @@ def test_product_images_match_type_and_are_stable(client: TestClient) -> None:
     tile = client.get(products["Books"]["image_url"])  # books have no photos -> line-icon tile
     assert tile.headers["content-type"].startswith("image/svg+xml") and "#EFEFEF" in tile.text
     assert client.get("/images/1.svg").status_code == 200  # old URL still works
+
+
+def test_manual_photo_overrides_icon_tile(client: TestClient, tmp_path, monkeypatch) -> None:
+    from app import images
+
+    monkeypatch.setattr(images, "MANUAL_DIR", tmp_path)
+    assert images.type_slug("Children's Picture Book") == "childrens-picture-book"
+    assert images.type_slug("Art & Craft Kit") == "art-craft-kit"
+    book = next(p for p in client.get("/products", params={"limit": 500}).json()["items"] if p["category"] == "Books")
+    assert client.get(book["image_url"]).headers["content-type"].startswith("image/svg+xml")
+    (tmp_path / f"{images.type_slug(images.product_type(book['name']))}.png").write_bytes(b"fake png bytes")
+    dropped = client.get(book["image_url"])  # picked up without a restart
+    assert dropped.headers["content-type"] == "image/png" and dropped.content == b"fake png bytes"
 
 
 def test_recently_viewed_keeps_out_of_stock_with_flag(client: TestClient) -> None:

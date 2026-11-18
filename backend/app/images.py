@@ -1,10 +1,12 @@
-"""Product images: real photos from DummyJSON test data, with line-icon tiles as fallback.
+"""Product images: one real photo per product type, with line-icon tiles as fallback.
 
-Photos are downloaded once by `python -m data.fetch_images` into data/images/ and served
-from disk, so the app works offline. Each product gets the photo whose DummyJSON title
-matches its product type (a mouse never shows a phone). When several photos match, the
-product id picks one, so the choice is the same on every run. Product types without a
-good photo, and every product when the photos are missing, get a clean line-icon tile.
+Order for each product type (the end of the product name, e.g. "Office Chair"):
+1. A photo dropped into data/images/manual/ named after the type, e.g. office-chair.jpg
+   (.jpg, .jpeg, .png or .webp). Picked up on the next request, no restart needed.
+2. The downloaded DummyJSON photo (`python -m data.fetch_images`) whose title matches the
+   type (a mouse never shows a phone). Every product of a type gets the same photo.
+3. A clean line-icon tile.
+`python -m data.photo_coverage` prints coverage and lists the types still missing a photo.
 """
 from __future__ import annotations
 
@@ -16,6 +18,9 @@ from pathlib import Path
 
 IMAGES_DIR = Path(__file__).resolve().parent.parent / "data" / "images"
 MANIFEST_PATH = IMAGES_DIR / "manifest.json"
+MANUAL_DIR = IMAGES_DIR / "manual"
+MANUAL_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 
 TILE_BG = "#EFEFEF"
 ICON_INK = "#191919"
@@ -46,7 +51,7 @@ TYPE_PHOTOS: dict[str, list[tuple[str, str | None]]] = {
     "Smartwatch": [("mobile-accessories", r"apple watch")],
     "Power Bank": [("mobile-accessories", r"battery pack")],
     "Phone Case": [("mobile-accessories", r"\bcase\b")],
-    "USB-C Charger": [("mobile-accessories", r"charger")],
+    "USB-C Charger": [("mobile-accessories", r"iphone charger")],  # not the wireless charging pad
     # Fashion
     "T-Shirt": [("mens-shirts", r"tshirt|short sleeve")],
     "Sneakers": [("mens-shoes", r"sneakers|trainers|jordan")],
@@ -138,12 +143,32 @@ def photo_candidates(name: str, category: str) -> list[dict]:
             if any(e["category"] == c and (rx is None or rx.search(e["title"])) for c, rx in rules)]
 
 
-def product_photo(product_id: int, name: str, category: str) -> Path | None:
-    """The photo for one product, or None when the type has no good match."""
+def type_slug(product_type_name: str) -> str:
+    """File name stem for a type's manual photo: "USB-C Charger" -> "usb-c-charger"."""
+    return re.sub(r"[^a-z0-9]+", "-", product_type_name.lower().replace("'", "")).strip("-")
+
+
+def manual_photo(product_type_name: str) -> Path | None:
+    """A photo the owner dropped into data/images/manual/ for this type, if any."""
+    stem = type_slug(product_type_name)
+    for ext in MANUAL_EXTENSIONS:
+        for path in (MANUAL_DIR / f"{stem}{ext}", MANUAL_DIR / f"{stem}{ext.upper()}"):
+            if path.is_file():
+                return path
+    return None
+
+
+def product_photo(name: str, category: str) -> Path | None:
+    """The one photo shared by every product of this type, or None (-> icon tile)."""
+    manual = manual_photo(product_type(name))
+    if manual is not None:
+        return manual
     candidates = photo_candidates(name, category)
-    if not candidates:
-        return None
-    return IMAGES_DIR / candidates[product_id % len(candidates)]["file"]
+    return IMAGES_DIR / candidates[0]["file"] if candidates else None
+
+
+def media_type(photo: Path) -> str:
+    return MEDIA_TYPES.get(photo.suffix.lower(), "application/octet-stream")
 
 
 def product_svg(name: str, category: str, brand: str) -> str:

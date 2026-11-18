@@ -20,7 +20,7 @@ from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import Base, engine, get_db
-from app.images import product_photo, product_svg
+from app.images import media_type, product_photo, product_svg
 from app.models import Event, Product, User
 from app.schemas import (
     AdminSettingsOut,
@@ -153,12 +153,13 @@ def get_product(product_id: int, db: Session = Depends(get_db)) -> ProductOut:
 @app.get("/images/{product_id}")
 @app.get("/images/{product_id}.svg", include_in_schema=False)
 def product_image(product_id: int, db: Session = Depends(get_db)) -> Response:
-    """Product photo from data/images (DummyJSON test data), or a line-icon tile when there is no good match."""
+    """The type's photo (manual drop-in first, then DummyJSON), or a line-icon tile when there is none."""
     product = get_product_or_404(db, product_id)
-    cache = {"Cache-Control": "public, max-age=86400"}
-    photo = product_photo(product.id, product.name, product.category)
+    # no-cache: browsers revalidate, so a photo dropped into data/images/manual/ shows up on reload.
+    cache = {"Cache-Control": "no-cache"}
+    photo = product_photo(product.name, product.category)
     if photo is not None:
-        return FileResponse(photo, media_type="image/webp", headers=cache)
+        return FileResponse(photo, media_type=media_type(photo), headers=cache)
     svg = product_svg(product.name, product.category, product.brand)
     return Response(content=svg, media_type="image/svg+xml", headers=cache)
 
