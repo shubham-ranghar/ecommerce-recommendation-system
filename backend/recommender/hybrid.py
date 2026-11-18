@@ -3,7 +3,8 @@
 Pipeline for one user:
   GENERATE CANDIDATES  take the top 100 products from each method and merge them.
   RANK                 1. normalise each method's scores to 0..1 (min-max)
-                       2. weighted sum: 35% item-CF + 20% SVD + 25% content + 20% popularity
+                       2. weighted sum of item-CF, SVD, content, popularity and user-user CF
+                          (weights in DEFAULT_WEIGHTS; the admin can change them)
                        3. business rules:
                           - remove out-of-stock items
                           - remove items the user already bought (can be switched off)
@@ -18,11 +19,13 @@ from collections import Counter
 import numpy as np
 
 from recommender.base import Recommendation, UserHistory, minmax, top_indices
-from recommender.collaborative import ItemCFRecommender, SVDRecommender
+from recommender.collaborative import ItemCFRecommender, SVDRecommender, UserCFRecommender
 from recommender.content_based import ContentBasedRecommender
 from recommender.popularity import PopularityRecommender
 
-DEFAULT_WEIGHTS: dict[str, float] = {"collaborative": 0.35, "svd": 0.20, "content": 0.25, "popularity": 0.20}
+DEFAULT_WEIGHTS: dict[str, float] = {
+    "collaborative": 0.35, "svd": 0.20, "content": 0.25, "popularity": 0.20, "user_cf": 0.20,
+}
 
 
 class HybridRecommender:
@@ -39,11 +42,13 @@ class HybridRecommender:
         max_per_category: int = 3,
         price_penalty: float = 0.3,
         exclude_purchased: bool = True,
+        user_cf: UserCFRecommender | None = None,
     ) -> None:
         self.popularity = popularity
         self.content = content
         self.item_cf = item_cf
         self.svd = svd
+        self.user_cf = user_cf
         self.weights = weights or DEFAULT_WEIGHTS
         self.n_candidates = n_candidates
         self.max_per_category = max_per_category
@@ -68,6 +73,9 @@ class HybridRecommender:
             "collaborative": cf_scores,
             "svd": self.svd.score_user(history),
         }
+        # Only when it counts: at weight 0 the hybrid behaves exactly as if user-user CF did not exist.
+        if self.user_cf is not None and self.weights.get("user_cf", 0.0) > 0:
+            method_scores["user_cf"] = self.user_cf.score_user(history)
 
         # 2) Business rules that remove items completely
         blocked = set(exclude or set())
@@ -124,6 +132,8 @@ class HybridRecommender:
         if dominant == "content" and content_from[i] >= 0:
             verb = history.actions.get(int(content_from[i]), "viewed")
             return f"Because you {verb} {catalog.names[content_from[i]]}"
+        if dominant == "user_cf":
+            return UserCFRecommender.reason
         if dominant == "svd":
             return f"Shoppers with your taste love this {catalog.categories[i]} pick"
         return self.popularity.reason(i)

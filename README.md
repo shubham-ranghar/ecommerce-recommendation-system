@@ -17,6 +17,8 @@ an **Admin page** to tune the hybrid's weights and business rules without touchi
 
 Everything runs locally. There are no paid APIs and no Docker.
 
+Product images are photos from the free [DummyJSON](https://dummyjson.com) test data, downloaded once with `python -m data.fetch_images` and served from `backend/data/images/`; product types without a matching photo show a line-icon tile.
+
 ---
 
 ## 1. Quick start (Windows)

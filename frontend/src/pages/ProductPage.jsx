@@ -13,6 +13,7 @@ export default function ProductPage() {
   const [similar, setSimilar] = useState(null);
   const [alsoLiked, setAlsoLiked] = useState(null);
   const [boughtTogether, setBoughtTogether] = useState(null);
+  const [alsoBought, setAlsoBought] = useState(null);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState("");
   const [myRating, setMyRating] = useState(0);
@@ -23,12 +24,14 @@ export default function ProductPage() {
     setSimilar(null);
     setAlsoLiked(null);
     setBoughtTogether(null);
+    setAlsoBought(null);
     setMessage("");
     setMyRating(0);
     api.product(productId).then(setProduct).catch((e) => setError(e.message));
     api.similar(productId).then(setSimilar).catch(() => setSimilar([]));
     api.alsoLiked(productId).then(setAlsoLiked).catch(() => setAlsoLiked([]));
     api.boughtTogether(productId).then(setBoughtTogether).catch(() => setBoughtTogether([]));
+    api.alsoBought(productId).then(setAlsoBought).catch(() => setAlsoBought([]));
   }, [productId]);
 
   // COLLECT: log one "view" event per product page visit
@@ -60,7 +63,9 @@ export default function ProductPage() {
       </nav>
 
       <div className="card grid gap-8 overflow-hidden p-4 md:grid-cols-2 md:p-6">
-        <img src={imageUrl(product)} alt={product.name} className="aspect-[4/3] w-full rounded-xl object-cover" />
+        <div className="aspect-square w-full overflow-hidden rounded-xl bg-[#EFEFEF] p-8 sm:p-12">
+          <img src={imageUrl(product)} alt={product.name} className="h-full w-full object-contain mix-blend-multiply" />
+        </div>
         <div className="flex flex-col">
           <span className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
             {product.category} · {product.brand}
@@ -128,6 +133,16 @@ export default function ProductPage() {
         items={similar?.slice(0, 5)}
         loading={!similar}
       />
+      {/* Hidden when nobody else bought this product together with something else */}
+      {(!alsoBought || alsoBought.length > 0) && (
+        <RecommendationRow
+          title="Customers who bought this also bought"
+          subtitle="Based only on purchases by other shoppers (item-item, purchases only)"
+          method="also_bought"
+          items={alsoBought?.slice(0, 5)}
+          loading={!alsoBought}
+        />
+      )}
       <RecommendationRow
         title="Customers who liked this also liked"
         subtitle="Learned from what other shoppers did (item-item collaborative filtering)"

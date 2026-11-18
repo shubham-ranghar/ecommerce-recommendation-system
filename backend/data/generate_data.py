@@ -281,7 +281,7 @@ def make_products(rng: np.random.Generator) -> list[dict]:
                     "description": description,
                     "tags": ",".join(dict.fromkeys(tags)),
                     "stock": stock,
-                    "image_url": f"/images/{pid}.svg",
+                    "image_url": f"/images/{pid}",
                     # hidden fields used only for simulation
                     "_type": type_name,
                     "_style": style,

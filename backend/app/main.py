@@ -6,18 +6,21 @@ Interactive API docs: http://localhost:8000/docs
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import Base, engine, get_db
-from app.images import product_svg
+from app.images import product_photo, product_svg
 from app.models import Event, Product, User
 from app.schemas import (
     AdminSettingsOut,
@@ -78,7 +81,7 @@ def to_product_out(p: Product, stats: dict[int, tuple[float, int]]) -> ProductOu
     return ProductOut(
         id=p.id, name=p.name, category=p.category, brand=p.brand, price=p.price,
         description=p.description, tags=[t for t in p.tags.split(",") if t], stock=p.stock,
-        image_url=p.image_url, rating_avg=avg, rating_count=count,
+        in_stock=p.stock > 0, image_url=p.image_url, rating_avg=avg, rating_count=count,
     )
 
 
@@ -145,11 +148,19 @@ def get_product(product_id: int, db: Session = Depends(get_db)) -> ProductOut:
     return to_product_out(product, rating_stats(db, [product_id]))
 
 
-@app.get("/images/{product_id}.svg")
+# The ".svg" path is what databases generated before the photo change store; it serves the same image.
+# Decorators register bottom-up, so the ".svg" route must be the lower one to be matched first.
+@app.get("/images/{product_id}")
+@app.get("/images/{product_id}.svg", include_in_schema=False)
 def product_image(product_id: int, db: Session = Depends(get_db)) -> Response:
+    """Product photo from data/images (DummyJSON test data), or a line-icon tile when there is no good match."""
     product = get_product_or_404(db, product_id)
+    cache = {"Cache-Control": "public, max-age=86400"}
+    photo = product_photo(product.id, product.name, product.category)
+    if photo is not None:
+        return FileResponse(photo, media_type="image/webp", headers=cache)
     svg = product_svg(product.name, product.category, product.brand)
-    return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+    return Response(content=svg, media_type="image/svg+xml", headers=cache)
 
 
 # ---------- users ----------
@@ -236,6 +247,14 @@ def recommend_also_liked(product_id: int, n: int = Query(default=8, ge=1, le=30)
     return to_recommendations(db, recommender.also_liked(product_id, n))
 
 
+@app.get("/recommend/also-bought/{product_id}", response_model=list[RecommendationOut])
+def recommend_also_bought(product_id: int, n: int = Query(default=8, ge=1, le=30),
+                          db: Session = Depends(get_db)) -> list[RecommendationOut]:
+    """Customers who bought this also bought: item-item CF on purchases only. Empty without data."""
+    get_product_or_404(db, product_id)
+    return to_recommendations(db, recommender.also_bought(product_id, n))
+
+
 @app.get("/recommend/bought-together/{product_id}", response_model=list[RecommendationOut])
 def recommend_bought_together(product_id: int, n: int = Query(default=6, ge=1, le=30),
                               db: Session = Depends(get_db)) -> list[RecommendationOut]:
@@ -284,39 +303,55 @@ def get_evaluation(refresh: bool = False) -> dict:
 
 
 # ---------- admin: recommendation rules ----------
-# Note: these endpoints have no login. That is fine for a local demo, but a real
-# shop must protect them (e.g. an admin session or API key) before going live.
+# Every /admin endpoint needs the header "X-Admin-Token: <ADMIN_TOKEN>".
+# The token is read from the ADMIN_TOKEN environment variable on every request.
+# If ADMIN_TOKEN is not set, admin is locked for everyone (fail closed).
+ADMIN_TOKEN_HEADER = "X-Admin-Token"
+
+
+def require_admin(x_admin_token: str | None = Header(default=None, alias=ADMIN_TOKEN_HEADER)) -> None:
+    expected = os.environ.get("ADMIN_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=401, detail="Admin is locked: set ADMIN_TOKEN on the server")
+    if not x_admin_token or not hmac.compare_digest(x_admin_token.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Missing or wrong admin token",
+                            headers={"WWW-Authenticate": ADMIN_TOKEN_HEADER})
+
+
+admin_router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+
+
 def settings_out(settings: RecommenderSettings) -> RecommenderSettingsModel:
     return RecommenderSettingsModel(**settings.to_dict())
 
 
-@app.get("/admin/settings", response_model=AdminSettingsOut)
+@admin_router.get("/settings", response_model=AdminSettingsOut)
 def get_admin_settings() -> AdminSettingsOut:
     recommender.ensure_fresh()
     return AdminSettingsOut(current=settings_out(recommender.settings), defaults=settings_out(RecommenderSettings()))
 
 
-@app.put("/admin/settings", response_model=AdminSettingsOut)
+@admin_router.put("/settings", response_model=AdminSettingsOut)
 def put_admin_settings(body: RecommenderSettingsModel) -> AdminSettingsOut:
     """Save new weights and rules. They apply to the next recommendation request."""
     recommender.update_settings(RecommenderSettings.from_dict(body.model_dump()))
     return get_admin_settings()
 
 
-@app.post("/admin/settings/reset", response_model=AdminSettingsOut)
+@admin_router.post("/settings/reset", response_model=AdminSettingsOut)
 def reset_admin_settings() -> AdminSettingsOut:
     recommender.update_settings(RecommenderSettings())
     return get_admin_settings()
 
 
-@app.post("/admin/evaluate")
+@admin_router.post("/evaluate")
 def evaluate_admin_settings() -> dict:
     """Score the saved admin settings against the defaults (a few seconds; not saved to results.json)."""
     recommender.ensure_fresh()
     return evaluate(save=False, settings=recommender.settings)
 
 
-@app.get("/admin/stats", response_model=AdminStatsOut)
+@admin_router.get("/stats", response_model=AdminStatsOut)
 def admin_stats(db: Session = Depends(get_db)) -> AdminStatsOut:
     by_type = dict(db.execute(select(Event.event_type, func.count()).group_by(Event.event_type)).all())
     return AdminStatsOut(
@@ -326,3 +361,7 @@ def admin_stats(db: Session = Depends(get_db)) -> AdminStatsOut:
         n_events=sum(by_type.values()),
         events_by_type=by_type,
     )
+
+
+# Registered last, after every admin route above has been added to the router.
+app.include_router(admin_router)

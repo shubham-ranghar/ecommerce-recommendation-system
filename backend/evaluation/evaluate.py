@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import engine as default_engine  # noqa: E402
 from recommender.base import Catalog, UserHistory, build_history, build_interaction_matrix, event_weights, minmax, top_indices  # noqa: E402
-from recommender.collaborative import ItemCFRecommender, SVDRecommender  # noqa: E402
+from recommender.collaborative import ItemCFRecommender, SVDRecommender, UserCFRecommender  # noqa: E402
 from recommender.content_based import ContentBasedRecommender  # noqa: E402
 from recommender.engine import load_events, load_products  # noqa: E402
 from recommender.hybrid import HybridRecommender  # noqa: E402
@@ -50,6 +50,7 @@ METHOD_LABELS = {
     "content": "Content-based",
     "collaborative": "Collaborative (item-item)",
     "svd": "Matrix factorisation (SVD)",
+    "user_cf": "Collaborative (user-user)",
     "hybrid": "Hybrid",
     "hybrid_no_diversity": "Hybrid without diversity rule",
     "hybrid_admin": "Hybrid with admin settings",
@@ -88,9 +89,10 @@ def evaluate(db=None, k: int = K, save: bool = True, settings: RecommenderSettin
     content = ContentBasedRecommender().fit(catalog)
     item_cf = ItemCFRecommender().fit(matrix, catalog)
     svd = SVDRecommender().fit(matrix, catalog)
-    hybrid = HybridRecommender(popularity, content, item_cf, svd)
+    user_cf = UserCFRecommender().fit(train, catalog)
+    hybrid = HybridRecommender(popularity, content, item_cf, svd, user_cf=user_cf)
     # Ablation: same hybrid without the "max 3 per category" rule, to show its cost/benefit
-    hybrid_no_div = HybridRecommender(popularity, content, item_cf, svd, max_per_category=k)
+    hybrid_no_div = HybridRecommender(popularity, content, item_cf, svd, max_per_category=k, user_cf=user_cf)
     rng = np.random.default_rng(0)
 
     def rank(scores: np.ndarray, seen: set[int]) -> list[int]:
@@ -104,6 +106,7 @@ def evaluate(db=None, k: int = K, save: bool = True, settings: RecommenderSettin
         "collaborative": lambda h, seen: rank(item_cf.score_user(h)[0], seen),
         # SVD scores can be negative, so shift them above zero before ranking
         "svd": lambda h, seen: rank(minmax(svd.score_user(h)) + 1e-9, seen),
+        "user_cf": lambda h, seen: rank(user_cf.score_user(h), seen),
         # Stock is a "today" rule, so it is switched off when replaying the past.
         "hybrid": lambda h, seen: [
             catalog.index[r.product_id] for r in hybrid.recommend(h, n=k, exclude=seen, apply_stock_filter=False)
@@ -114,7 +117,7 @@ def evaluate(db=None, k: int = K, save: bool = True, settings: RecommenderSettin
         ],
     }
     if settings is not None:
-        hybrid_admin = HybridRecommender(popularity, content, item_cf, svd, **settings.hybrid_kwargs())
+        hybrid_admin = HybridRecommender(popularity, content, item_cf, svd, user_cf=user_cf, **settings.hybrid_kwargs())
         methods["hybrid_admin"] = lambda h, seen: [
             catalog.index[r.product_id]
             for r in hybrid_admin.recommend(h, n=k, exclude=seen, apply_stock_filter=False)

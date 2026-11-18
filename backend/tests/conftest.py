@@ -9,6 +9,8 @@ from pathlib import Path
 # API tests must never touch the real database: point to a temp file BEFORE app imports.
 _TMP_DB = Path(tempfile.gettempdir()) / "shop_test.db"
 os.environ["SHOP_DATABASE_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+# Admin endpoints need this token in the X-Admin-Token header (see test_api.py: ADMIN).
+os.environ["ADMIN_TOKEN"] = "test-admin-token"
 
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402

@@ -25,7 +25,13 @@ from sqlalchemy import Engine, text
 
 from app.database import engine as default_engine
 from recommender.base import Catalog, Recommendation, UserHistory, build_history, build_interaction_matrix
-from recommender.collaborative import FrequentlyBoughtTogether, ItemCFRecommender, SVDRecommender
+from recommender.collaborative import (
+    AlsoBoughtRecommender,
+    FrequentlyBoughtTogether,
+    ItemCFRecommender,
+    SVDRecommender,
+    UserCFRecommender,
+)
 from recommender.content_based import ContentBasedRecommender
 from recommender.hybrid import HybridRecommender
 from recommender.popularity import PopularityRecommender
@@ -81,6 +87,9 @@ class RecommendationEngine:
             self.item_cf = ItemCFRecommender().fit(matrix, self.catalog)
             self.svd = SVDRecommender().fit(matrix, self.catalog)
             self.fbt = FrequentlyBoughtTogether().fit(events, self.catalog)
+            purchase_matrix, _ = build_interaction_matrix(events[events["event_type"] == "purchase"], self.catalog)
+            self.also_bought_cf = AlsoBoughtRecommender().fit(purchase_matrix, self.catalog)
+            self.user_cf = UserCFRecommender().fit(events, self.catalog)
             self.hybrid = self._build_hybrid()
             self.n_events = len(events)
             self._dirty = False
@@ -88,7 +97,7 @@ class RecommendationEngine:
 
     def _build_hybrid(self) -> HybridRecommender:
         return HybridRecommender(self.popularity, self.content, self.item_cf, self.svd,
-                                 **self.settings.hybrid_kwargs())
+                                 user_cf=self.user_cf, **self.settings.hybrid_kwargs())
 
     def update_settings(self, settings: RecommenderSettings) -> None:
         """Save new admin settings and apply them immediately (no retrain needed)."""
@@ -203,6 +212,11 @@ class RecommendationEngine:
         """'Frequently bought together' for one product (product page)."""
         self.ensure_fresh()
         return self.fbt.recommend([product_id], n)
+
+    def also_bought(self, product_id: int, n: int = 8) -> list[Recommendation]:
+        """'Customers who bought this also bought' (purchases only, product page)."""
+        self.ensure_fresh()
+        return self.also_bought_cf.also_bought(product_id, n)
 
     def similar(self, product_id: int, n: int = 8) -> list[Recommendation]:
         self.ensure_fresh()

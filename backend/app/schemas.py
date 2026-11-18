@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from recommender.hybrid import DEFAULT_WEIGHTS
+
 EventType = Literal["view", "click", "add_to_cart", "purchase", "rating"]
 
 
@@ -17,6 +19,7 @@ class ProductOut(BaseModel):
     description: str
     tags: list[str]
     stock: int
+    in_stock: bool = True  # False -> show "Out of stock" and no add-to-cart button
     image_url: str
     rating_avg: float | None = None
     rating_count: int = 0
@@ -79,10 +82,12 @@ class HybridWeights(BaseModel):
     svd: float = Field(ge=0, le=1)
     content: float = Field(ge=0, le=1)
     popularity: float = Field(ge=0, le=1)
+    # Default keeps older clients (that do not send it yet) on the standard blend.
+    user_cf: float = Field(default=DEFAULT_WEIGHTS["user_cf"], ge=0, le=1)
 
     @model_validator(mode="after")
     def at_least_one(self) -> "HybridWeights":
-        if self.collaborative + self.svd + self.content + self.popularity <= 0:
+        if self.collaborative + self.svd + self.content + self.popularity + self.user_cf <= 0:
             raise ValueError("At least one method needs a weight above 0")
         return self
 

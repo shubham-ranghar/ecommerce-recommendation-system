@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { adminToken, api } from "../api";
 import { METHOD_STYLES } from "../components/ProductCard";
 import { Spinner } from "../components/RecommendationRow";
 
@@ -11,7 +11,38 @@ const WEIGHTS = [
   ["svd", "Matrix factorisation", "Hidden taste factors learned from all shoppers"],
   ["content", "Content-based", "Products with similar descriptions and tags"],
   ["popularity", "Popularity", "What is trending right now"],
+  ["user_cf", "Shoppers like you", "What the 30 most similar shoppers bought"],
 ];
+
+// Asked once; the token is kept in sessionStorage until this browser tab closes.
+function TokenForm({ error, onSubmit }) {
+  const [value, setValue] = useState("");
+  return (
+    <form
+      className="card mx-auto mt-10 max-w-sm p-6"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (value.trim()) onSubmit(value.trim());
+      }}
+    >
+      <h1 className="font-serif text-xl font-medium text-ink">Admin access</h1>
+      <p className="mt-1 text-sm text-muted">Enter the admin token (the server's ADMIN_TOKEN).</p>
+      <input
+        type="password"
+        autoFocus
+        autoComplete="current-password"
+        aria-label="Admin token"
+        className="mt-4 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+      <button type="submit" className="btn-primary mt-4 w-full" disabled={!value.trim()}>
+        Continue
+      </button>
+    </form>
+  );
+}
 
 const METRICS = [
   ["precision_at_10", "Precision@10"],
@@ -122,6 +153,8 @@ export default function Admin() {
   const [busy, setBusy] = useState(false);
   const [evalResult, setEvalResult] = useState(null);
   const [evaluating, setEvaluating] = useState(false);
+  const [token, setToken] = useState(() => adminToken.get());
+  const [authError, setAuthError] = useState("");
 
   const apply = (data) => {
     setSaved(data.current);
@@ -129,11 +162,35 @@ export default function Admin() {
     setDraft(data.current);
   };
 
-  useEffect(() => {
-    api.adminSettings().then(apply).catch((e) => setError(e.message));
-    api.adminStats().then(setStats).catch(() => {});
-  }, []);
+  // A rejected token is forgotten, so the page asks for it again.
+  const handleAuth = (e) => {
+    if (e.status !== 401) return false;
+    adminToken.clear();
+    setToken("");
+    setDraft(null);
+    setAuthError(e.message || "That token was not accepted.");
+    return true;
+  };
 
+  useEffect(() => {
+    if (!token) return;
+    api.adminSettings().then(apply).catch((e) => handleAuth(e) || setError(e.message));
+    api.adminStats().then(setStats).catch(() => {});
+  }, [token]);
+
+  if (!token) {
+    return (
+      <TokenForm
+        error={authError}
+        onSubmit={(t) => {
+          adminToken.set(t);
+          setAuthError("");
+          setError(null);
+          setToken(t);
+        }}
+      />
+    );
+  }
   if (error) return <p className="text-red-600">Could not load admin settings: {error}</p>;
   if (!draft) return <Spinner label="Loading admin settings…" />;
 
@@ -151,7 +208,7 @@ export default function Admin() {
       setEvalResult(null);
       setStatus(message);
     } catch (e) {
-      setStatus(`Not saved: ${e.message}`);
+      if (!handleAuth(e)) setStatus(`Not saved: ${e.message}`);
     } finally {
       setBusy(false);
     }
@@ -162,7 +219,7 @@ export default function Admin() {
     try {
       setEvalResult(await api.adminEvaluate());
     } catch (e) {
-      setStatus(`Evaluation failed: ${e.message}`);
+      if (!handleAuth(e)) setStatus(`Evaluation failed: ${e.message}`);
     } finally {
       setEvaluating(false);
     }
@@ -175,8 +232,19 @@ export default function Admin() {
         <p className="text-sm text-slate-500">
           Tune how products are picked for shoppers. Changes apply on the next page load, without retraining.
         </p>
-        <p className="mt-2 inline-block rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-800 ring-1 ring-inset ring-amber-200">
-          Demo only: this page has no login. A live shop must protect it.
+        <p className="mt-2 text-xs text-slate-500">
+          Signed in with the admin token for this browser session.{" "}
+          <button
+            className="underline hover:text-slate-900"
+            onClick={() => {
+              adminToken.clear();
+              setToken("");
+              setDraft(null);
+              setAuthError("");
+            }}
+          >
+            Forget token
+          </button>
         </p>
       </div>
 

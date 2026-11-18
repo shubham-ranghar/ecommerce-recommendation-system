@@ -6,7 +6,13 @@ import pandas as pd
 
 from evaluation.evaluate import precision_recall_hit, time_split
 from recommender.base import Catalog, build_history, build_interaction_matrix, event_weights
-from recommender.collaborative import FrequentlyBoughtTogether, ItemCFRecommender, SVDRecommender
+from recommender.collaborative import (
+    AlsoBoughtRecommender,
+    FrequentlyBoughtTogether,
+    ItemCFRecommender,
+    SVDRecommender,
+    UserCFRecommender,
+)
 from recommender.content_based import ContentBasedRecommender
 from recommender.hybrid import HybridRecommender
 from recommender.popularity import PopularityRecommender
@@ -113,3 +119,60 @@ def test_settings_round_trip_and_fill_missing_weights() -> None:
     assert loaded.weights["content"] == 0.9 and set(loaded.weights) == set(RecommenderSettings().weights)
     assert loaded.hybrid_kwargs()["exclude_purchased"] is True
 
+
+def test_bought_together_needs_two_shared_baskets(events: pd.DataFrame, catalog: Catalog) -> None:
+    # One extra basket where the cookbook (8) and the yoga mat (9) are bought together once
+    once = make_events([(50, 8, "purchase", 1), (50, 9, "purchase", 1)])
+    data = pd.concat([events, once], ignore_index=True)
+    assert 9 not in [r.product_id for r in FrequentlyBoughtTogether().fit(data, catalog).recommend([8])]
+    assert 9 in [r.product_id for r in FrequentlyBoughtTogether(min_count=1).fit(data, catalog).recommend([8])]
+    assert [r.product_id for r in FrequentlyBoughtTogether().fit(data, catalog).recommend([1])][0] == 3  # 4 baskets
+
+
+def test_also_bought_uses_purchases_only(events: pd.DataFrame, catalog: Catalog) -> None:
+    purchases = events[events["event_type"] == "purchase"]
+    also_bought = AlsoBoughtRecommender().fit(build_interaction_matrix(purchases, catalog)[0], catalog)
+    ids = [r.product_id for r in also_bought.also_bought(1)]
+    assert ids == [3]  # users 1-4 bought phone + case; headphones (4) were only viewed/clicked
+    assert also_bought.also_bought(1)[0].reason == "4 shoppers bought both"
+    item_cf = ItemCFRecommender().fit(build_interaction_matrix(events, catalog)[0], catalog)
+    assert 4 in [r.product_id for r in item_cf.also_liked(1)]  # "also liked" still uses all interactions
+
+
+def test_user_cf_scores_what_similar_shoppers_bought(events: pd.DataFrame, catalog: Catalog) -> None:
+    user_cf = UserCFRecommender(k_neighbours=30).fit(events, catalog)
+    _, user_ids = build_interaction_matrix(events, catalog)
+    shopper = build_history(make_events([(99, 1, "purchase", 0)]), catalog)  # new shopper bought a phone
+    top, sims = user_cf.neighbours(shopper)
+    assert {user_ids[i] for i in top} == {1, 2, 3, 4} and np.all(sims > 0)  # the other phone buyers
+    scores = user_cf.score_user(shopper)
+    assert scores[catalog.index[3]] > 0  # case: bought by the similar shoppers
+    assert scores[catalog.index[4]] == 0  # headphones: only viewed by them, never bought
+    assert scores[catalog.index[6]] == 0  # novel: bought by book readers, who are not similar
+
+
+def test_user_cf_keeps_k_neighbours_and_skips_the_shopper_itself(events: pd.DataFrame, catalog: Catalog) -> None:
+    user_cf = UserCFRecommender(k_neighbours=2).fit(events, catalog)
+    _, user_ids = build_interaction_matrix(events, catalog)
+    own = build_history(events[events["user_id"] == 1], catalog)  # user 1 is also in the training matrix
+    top, _ = user_cf.neighbours(own)
+    assert len(top) == 2 and 1 not in {user_ids[i] for i in top}
+    empty = build_history(pd.DataFrame(), catalog)
+    assert not user_cf.score_user(empty).any()
+
+
+def test_hybrid_uses_user_cf_weight_and_reason(events: pd.DataFrame, catalog: Catalog) -> None:
+    base = fit_all(events, catalog)
+    user_cf = UserCFRecommender().fit(events, catalog)
+    shopper = build_history(make_events([(99, 1, "purchase", 0)]), catalog)
+    only_user_cf = {"collaborative": 0, "svd": 0, "content": 0, "popularity": 0, "user_cf": 1.0}
+    hybrid = HybridRecommender(base.popularity, base.content, base.item_cf, base.svd,
+                               weights=only_user_cf, user_cf=user_cf)
+    top = hybrid.recommend(shopper, n=3)[0]
+    assert top.product_id == 3 and top.reason == "Shoppers like you bought this" and top.method == "hybrid:user_cf"
+
+    # Weight 0 -> exactly the same list as a hybrid without user-user CF
+    weights = {**hybrid.weights, "collaborative": 0.35, "svd": 0.2, "content": 0.25, "popularity": 0.2, "user_cf": 0.0}
+    with_zero = HybridRecommender(base.popularity, base.content, base.item_cf, base.svd, weights=weights, user_cf=user_cf)
+    without = HybridRecommender(base.popularity, base.content, base.item_cf, base.svd, weights=weights)
+    assert [r.product_id for r in with_zero.recommend(shopper)] == [r.product_id for r in without.recommend(shopper)]

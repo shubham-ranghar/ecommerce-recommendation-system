@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-11-18T15:08:25+00:00",
+  "generated_at": "2026-11-18T17:24:46+00:00",
   "k": 10,
   "split": "time-based, latest 20% of each user's events (users with >= 5 events)",
-  "n_train_events": 16130,
-  "n_test_events": 4172,
+  "n_train_events": 16133,
+  "n_test_events": 4173,
   "n_test_users": 273,
   "n_products": 500,
-  "runtime_seconds": 7.08,
+  "runtime_seconds": 4.88,
   "results": [
     {
       "method": "random",
@@ -35,34 +35,42 @@
     {
       "method": "collaborative",
       "label": "Collaborative (item-item)",
-      "precision_at_10": 0.067,
-      "recall_at_10": 0.2306,
+      "precision_at_10": 0.0674,
+      "recall_at_10": 0.2315,
       "hit_rate_at_10": 0.4908,
       "coverage": 0.402
     },
     {
       "method": "svd",
       "label": "Matrix factorisation (SVD)",
-      "precision_at_10": 0.0582,
-      "recall_at_10": 0.219,
-      "hit_rate_at_10": 0.4725,
-      "coverage": 0.538
+      "precision_at_10": 0.0593,
+      "recall_at_10": 0.2206,
+      "hit_rate_at_10": 0.4799,
+      "coverage": 0.542
+    },
+    {
+      "method": "user_cf",
+      "label": "Collaborative (user-user)",
+      "precision_at_10": 0.0579,
+      "recall_at_10": 0.1918,
+      "hit_rate_at_10": 0.4359,
+      "coverage": 0.44
     },
     {
       "method": "hybrid",
       "label": "Hybrid",
       "precision_at_10": 0.0678,
-      "recall_at_10": 0.2198,
-      "hit_rate_at_10": 0.5092,
-      "coverage": 0.408
+      "recall_at_10": 0.2297,
+      "hit_rate_at_10": 0.5165,
+      "coverage": 0.378
     },
     {
       "method": "hybrid_no_diversity",
       "label": "Hybrid without diversity rule",
-      "precision_at_10": 0.0762,
-      "recall_at_10": 0.2597,
-      "hit_rate_at_10": 0.5348,
-      "coverage": 0.516
+      "precision_at_10": 0.0744,
+      "recall_at_10": 0.2615,
+      "hit_rate_at_10": 0.5531,
+      "coverage": 0.472
     }
   ]
 }

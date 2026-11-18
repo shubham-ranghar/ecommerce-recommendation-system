@@ -2,9 +2,10 @@
 export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 async function request(path, options = {}) {
+  const { headers, ...rest } = options;
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
+    ...rest,
+    headers: { "Content-Type": "application/json", ...headers },
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -13,10 +14,41 @@ async function request(path, options = {}) {
     } catch {
       /* response had no JSON body */
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = res.status; // e.g. 401 -> the Admin page asks for the token again
+    throw error;
   }
   return res.json();
 }
+
+// Admin token: asked once on the Admin page and kept for this browser tab session only.
+const ADMIN_TOKEN_KEY = "shopsmart.adminToken";
+export const adminToken = {
+  get: () => {
+    try {
+      return sessionStorage.getItem(ADMIN_TOKEN_KEY) || "";
+    } catch {
+      return "";
+    }
+  },
+  set: (token) => {
+    try {
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+    } catch {
+      /* storage blocked: the token only lives until the page reloads */
+    }
+  },
+  clear: () => {
+    try {
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    } catch {
+      /* nothing stored */
+    }
+  },
+};
+
+const adminRequest = (path, options = {}) =>
+  request(path, { ...options, headers: { "X-Admin-Token": adminToken.get() } });
 
 const qs = (params) => {
   const clean = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "");
@@ -35,15 +67,17 @@ export const api = {
   similar: (id) => request(`/recommend/similar/${id}`),
   alsoLiked: (id) => request(`/recommend/also-liked/${id}`),
   boughtTogether: (id) => request(`/recommend/bought-together/${id}`),
+  alsoBought: (id) => request(`/recommend/also-bought/${id}`),
   cart: (userId, productIds) =>
     request(`/recommend/cart${qs({ user_id: userId, product_ids: productIds.join(",") })}`),
   evaluation: (refresh = false) => request(`/evaluation${refresh ? "?refresh=true" : ""}`),
-  // Admin: recommendation rules
-  adminSettings: () => request("/admin/settings"),
-  saveAdminSettings: (settings) => request("/admin/settings", { method: "PUT", body: JSON.stringify(settings) }),
-  resetAdminSettings: () => request("/admin/settings/reset", { method: "POST" }),
-  adminEvaluate: () => request("/admin/evaluate", { method: "POST" }),
-  adminStats: () => request("/admin/stats"),
+  // Admin: recommendation rules (every call sends the X-Admin-Token header)
+  adminSettings: () => adminRequest("/admin/settings"),
+  saveAdminSettings: (settings) =>
+    adminRequest("/admin/settings", { method: "PUT", body: JSON.stringify(settings) }),
+  resetAdminSettings: () => adminRequest("/admin/settings/reset", { method: "POST" }),
+  adminEvaluate: () => adminRequest("/admin/evaluate", { method: "POST" }),
+  adminStats: () => adminRequest("/admin/stats"),
 };
 
 export const imageUrl = (product) => `${API_URL}${product.image_url}`;
